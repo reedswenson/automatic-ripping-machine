@@ -651,6 +651,7 @@ def makemkv_backup(job, rawpath):
         rawpath,
     ]
     logging.info("Backing up disc")
+    write_batch_info(job, 1, 1, mode="all")
     collections.deque(run(cmd, OutputType.MSG), maxlen=0)
 
 
@@ -705,6 +706,8 @@ def makemkv_mkv(job, rawpath):
             f"--minlength={job.config.MINLENGTH}",
         ]
         logging.info("Process all tracks from disc.")
+        title_count = job.no_of_titles or len(job.tracks) or 1
+        write_batch_info(job, 1, title_count, mode="all")
         collections.deque(run(cmd, OutputType.MSG), maxlen=0)
     else:
         process_single_tracks(job, rawpath, 'auto')
@@ -785,6 +788,7 @@ def rip_mainfeature(job, track, rawpath):
         f"--minlength={job.config.MINLENGTH}",
     ]
     logging.info("Ripping main feature")
+    write_batch_info(job, 1, 1, mode="single")
     # Possibly update db to say track was ripped
     collections.deque(run(cmd, OutputType.MSG), maxlen=0)
 
@@ -839,17 +843,7 @@ def process_single_tracks(job, rawpath, mode: str):
             track.track_number,
             rawpath,
         ]
-        # Create a batch info file so the web gui can know when this process started, which track, and how many tracks
-        logging.debug(f"Saving batch position info for job {job.job_id}: "
-                      f"BINF:{int(time())},{process_index},{len(tracks_to_process)},0000"
-                      )
-        batch_info_file = logfile_base+".batchinfo"
-        if not os.path.exists(batch_info_file):
-            with open(batch_info_file, 'w') as f:
-                f.write(f"BINF:{int(time())},{process_index},{len(tracks_to_process)},0000")
-        else:
-            with open(batch_info_file, 'a') as f:
-                f.write(f"\nBINF:{int(time())},{process_index},{len(tracks_to_process)},0000")
+        write_batch_info(job, process_index, len(tracks_to_process), mode="single")
 
         logging.debug("Starting to rip single track.")
         collections.deque(run(cmd, OutputType.MSG), maxlen=0)
@@ -952,6 +946,13 @@ def _makemkv_key_present():
     return re.search(r'app_Key\s*=\s*"[A-Z]-.+"', contents) is not None
 
 
+def progress_log_path(job):
+    """Unquoted path to the MakeMKV progress log the UI tails."""
+    logfile = os.path.join(job.config.LOGPATH, "progress", f"{job.job_id:d}.log")
+    logging.debug(f"logging progress to '{logfile}'")
+    return logfile
+
+
 def progress_log(job):
     """
     Retrieve the path to the progress log file
@@ -964,12 +965,28 @@ def progress_log(job):
     Parameters:
         job: arm.models.job.Job
     Returns:
-        str: log file
-
+        str: log file (shell-quoted for MakeMKV --progress)
     """
-    logfile = os.path.join(job.config.LOGPATH, "progress", f"{job.job_id:d}.log")
-    logging.debug(f"logging progress to '{logfile}'")
-    return shlex.quote(logfile)
+    return shlex.quote(progress_log_path(job))
+
+
+def write_batch_info(job, process_index, process_count, stage="0000", mode="single"):
+    """
+    Write a BINF line for the UI MakeMKV progress/ETA parser.
+
+    Parameters:
+        mode: ``single`` — one makemkv call per title; the UI may append a new
+              timestamp when PRGC changes.
+              ``all`` — one makemkv call for the whole disc; the UI keeps this
+              timestamp and uses PRGV total/max for percent.
+    """
+    batch_info_file = progress_log_path(job) + ".batchinfo"
+    line = f"BINF:{int(time())},{process_index},{process_count},{stage},{mode}"
+    logging.debug(f"Saving batch position info for job {job.job_id}: {line}")
+    os.makedirs(os.path.dirname(batch_info_file), exist_ok=True)
+    prefix = "\n" if os.path.exists(batch_info_file) else ""
+    with open(batch_info_file, "a") as handle:
+        handle.write(f"{prefix}{line}")
 
 
 class TrackInfoProcessor:

@@ -134,26 +134,21 @@ def process_makemkv_logfile(job, job_results):
     batch_index = read_log_line(batch_log_path)
     # Correctly get last entry for progress bar
 
-    job_progress_status = find_last_regex_match(r"PRGV:(\d{3,}),(\d+),(\d{3,})", lines)
+    job_progress_status = find_last_regex_match(r"PRGV:(\d+),(\d+),(\d+)", lines)
     job_stage_index = find_last_regex_match(r"PRGC:(\d+),(\d+),\"([\w -]{2,})\"", lines)
-    job_batch_info = find_last_regex_match(r"BINF:(\d{10}),(\d+),(\d+),(\d+)", batch_index)
+    job_batch_info = find_last_regex_match(r"BINF:(\d{10}),(\d+),(\d+),(\d+)(?:,(\w+))?", batch_index)
+    batch_mode = (job_batch_info.group(5) or "single") if job_batch_info else "single"
 
     if job_progress_status is not None:
         app.logger.debug(f"job_progress_status: {job_progress_status}")
+        # all-mode: PRGV.total/max is disc-wide. single-mode: current/max is this title.
+        progress_part = (job_progress_status.group(2) if batch_mode == "all"
+                         else job_progress_status.group(1))
+        progress_whole = job_progress_status.group(3)
         job.progress = job_results['progress'] = \
-            f"{percentage(job_progress_status.group(1), job_progress_status.group(3)):.2f}"
-        job.progress_round = percentage(job_progress_status.group(1),
-                                        job_progress_status.group(3))
-        # The ETA calc needs the batch-info (BINF) file, but that file is only
-        # written further down, in the `job_stage_index` block. On the first
-        # poll for a job it does not exist yet, so `job_batch_info` is None and
-        # `job_batch_info.group(1)` raises
-        # "'NoneType' object has no attribute 'group'", which 500s the whole
-        # /json endpoint and leaves the Active Rips card blank. Because the
-        # crash happens *before* the code that creates the BINF file, it never
-        # bootstraps and stays broken for the entire rip. Guard it (and the
-        # divide-by-zero when progress is still 0) and report an Unknown ETA
-        # until the batch info is available.
+            f"{percentage(progress_part, progress_whole):.2f}"
+        job.progress_round = percentage(progress_part, progress_whole)
+        # ETA needs a BINF start timestamp. Guard missing BINF and 0% (divide-by-zero).
         if job_batch_info is not None and float(job.progress) > 0:
             job_start_time = int(job_batch_info.group(1))
             current_time = int(time())
@@ -165,7 +160,10 @@ def process_makemkv_logfile(job, job_results):
                              f"Projected time: {total_time}, "
                              f"Time remaining: {time_remaining}"
                              )
-            job.eta = strftime("%Hh%Mm%Ss", gmtime(time_remaining))
+            if time_remaining < 0:
+                job.eta = "Unknown"
+            else:
+                job.eta = strftime("%Hh%Mm%Ss", gmtime(time_remaining))
         else:
             job.eta = "Unknown"
     else:
@@ -176,10 +174,18 @@ def process_makemkv_logfile(job, job_results):
     if job_stage_index is not None:
         try:
             stage_name = job_stage_index.group(3)
-            # BINF is written when MakeMKV starts ripping titles. Scan/analyze
+            # BINF is written when MakeMKV starts ripping. Scan/analyze
             # progress (PRGC) often appears first, so job_batch_info is None.
             if job_batch_info is None:
                 job.stage = job_results['stage'] = stage_name
+            elif batch_mode == "all":
+                # One makemkv command for the disc: keep the original BINF
+                # timestamp and show the current title from PRGC's 0-based id.
+                title_num = int(job_stage_index.group(2)) + 1
+                title_count = job_batch_info.group(3)
+                job.stage = job_results['stage'] = (
+                    f"Track {title_num}/{title_count}<br>{stage_name}"
+                )
             else:
                 if job_batch_info.group(4) != job_stage_index.group(1):
                     app.logger.debug(f"Appending new batch position info for job {job.job_id}: "
@@ -192,7 +198,7 @@ def process_makemkv_logfile(job, job_results):
                         f.write(f"\nBINF:{int(time())},"
                                 f"{job_batch_info.group(2)},"
                                 f"{job_batch_info.group(3)},"
-                                f"{job_stage_index.group(1)}"
+                                f"{job_stage_index.group(1)},single"
                                 )
                 app.logger.debug(f"job_stage_index: {job_stage_index}")
                 current_index = (f"Track {job_batch_info.group(2)}/"
