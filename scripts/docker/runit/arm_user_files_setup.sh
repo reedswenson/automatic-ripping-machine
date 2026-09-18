@@ -14,23 +14,56 @@ DEFAULT_UID=1000
 DEFAULT_GID=1000
 
 
-# Function to check if the ARM user has ownership of the requested folder
-check_folder_ownership() {
-    local check_dir="$1"  # Get the folder path from the first argument
-    local folder_uid=$(stat -c "%u" "$check_dir")
-    local folder_gid=$(stat -c "%g" "$check_dir")
+# Run a command as the arm user (script itself runs as root)
+as_arm() {
+    if command -v runuser >/dev/null 2>&1; then
+        runuser -u arm -- "$@"
+        return
+    fi
+    local quoted=""
+    local arg
+    for arg in "$@"; do
+        quoted+=$(printf '%q ' "$arg")
+    done
+    su -s /bin/sh arm -c "$quoted"
+}
 
-    echo "Checking ownership of $check_dir"
+# Check that the ARM user can read, write, and traverse a working directory.
+# Ownership is not required — group/other bits and ACLs are enough.
+check_folder_access() {
+    local check_dir="$1"
+    local missing=()
+    local perms
 
-    if [ "$folder_uid" != "$ARM_UID" ] || [ "$folder_gid" != "$ARM_GID" ]; then
+    echo "Checking access to $check_dir"
+
+    if [[ ! -d "$check_dir" ]]; then
         echo "---------------------------------------------"
-        echo "[ERROR]: ARM does not have permissions to $check_dir using $ARM_UID:$ARM_GID"
-        echo "Check your user permissions and restart ARM. Folder permissions--> $folder_uid:$folder_gid"
+        echo "[ERROR]: Directory does not exist: $check_dir"
         echo "---------------------------------------------"
         exit 1
     fi
 
-    echo "[OK]: ARM UID and GID set correctly, ARM has access to '$check_dir' using $ARM_UID:$ARM_GID"
+    if ! as_arm test -r "$check_dir"; then
+        missing+=("read")
+    fi
+    if ! as_arm test -w "$check_dir"; then
+        missing+=("write")
+    fi
+    if ! as_arm test -x "$check_dir"; then
+        missing+=("execute")
+    fi
+
+    if (( ${#missing[@]} > 0 )); then
+        perms=$(stat -c '%A (%a) owner=%U:%G (%u:%g)' "$check_dir")
+        echo "---------------------------------------------"
+        echo "[ERROR]: ARM user (uid=${ARM_UID} gid=${ARM_GID}) cannot ${missing[*]} $check_dir"
+        echo "Read, write, and execute are required; ownership is not. Current: $perms"
+        echo "---------------------------------------------"
+        exit 1
+    fi
+
+    echo "[OK]: ARM has read/write/execute access to '$check_dir'"
 }
 
 ### Setup User
@@ -55,8 +88,8 @@ usermod -a -G render arm
 ### Setup Files
 chown -R arm:arm /opt/arm
 
-# Check ownership of the ARM home folder
-check_folder_ownership "/home/arm"
+# Check access to the ARM home folder
+check_folder_access "/home/arm"
 
 # setup needed/expected dirs if not found
 SUBDIRS="media media/completed media/raw media/movies media/transcode logs logs/progress db music .MakeMKV"
@@ -77,8 +110,8 @@ if [ -h /home/arm/Music ]; then
 fi
 
 ##### Setup ARM-specific config files if not found
-# Check ownership of the ARM config folder
-check_folder_ownership "/etc/arm/config"
+# Check access to the ARM config folder
+check_folder_access "/etc/arm/config"
 
 mkdir -p /etc/arm/config
 CONFS="arm.yaml apprise.yaml"

@@ -68,40 +68,40 @@ The script will now:
    8. Save and close
 
 
-4. **Permissions**: When starting the ARM docker container, if the ARM user ID and group ID from steps 1 and 2 are not set correctly ARM will not start. If the container does not start, check the docker logs.
+4. **Permissions**: When starting the ARM docker container, ARM checks that the `arm` user can read, write, and traverse its working directories (`/home/arm` and `/etc/arm/config`). Ownership is not required — group write, world write, or ACLs are enough as long as the `arm` user can use the directory. If the container does not start, check the docker logs.
    
    ```bash
    docker logs automatic-ripping-machine
    ```
 
-    - If ARM has ownership, you'll see:
+    - If ARM has access, you'll see:
     ```
     Adding arm user to 'render' group
-    Checking ownership of /home/arm
-    [OK]: ARM UID and GID set correctly, ARM has access to '/home/arm' using 1001:1001
+    Checking access to /home/arm
+    [OK]: ARM has read/write/execute access to '/home/arm'
     Removing any link between music and Music
-    Checking ownership of /etc/arm/config
-    [OK]: ARM UID and GID set correctly, ARM has access to '/etc/arm/config' using 1001:1001
+    Checking access to /etc/arm/config
+    [OK]: ARM has read/write/execute access to '/etc/arm/config'
     Checking location of abcde configuration files
     ```
-    - If ARM does not have ownership, you'll see:
+    - If ARM cannot use a directory, you'll see:
     ```
-    Removing any link between music and Music
-    Checking ownership of /etc/arm
+    Checking access to /etc/arm/config
     ---------------------------------------------
-    [ERROR]: ARM does not have permissions to /etc/arm using 1001:1001
-    Check your user permissions and restart ARM
-    Folder permissions--> 0:0
+    [ERROR]: ARM user (uid=1001 gid=1001) cannot write /etc/arm/config
+    Read, write, and execute are required; ownership is not. Current: drwxr-xr-x (755) owner=root:root (0:0)
     ---------------------------------------------
     *** /etc/my_init.d/arm_user_files_setup.sh failed with status 1
     ```
    
-   The script outputs the configuration it is expecting, the above error expects the UID and GID to both be '1001'. With the start script having set these values. However, ARM encountered the respective folder owned by root (0:0). To resolve this, ensure that the respective directories and sub-folders are owned by the correct user.
-
-   This can be fixed by changing the ownership for the associated linked file. In the above example, the /etc/arm volume is linked to the /home/arm/config directory.
+   Grant the `arm` user (the UID/GID from `start_arm_container.sh`) read, write, and execute on the mounted directories. Changing ownership is one option, but group permissions or ACLs also work.
 
    ```bash
+   # Option A: make the arm user the owner
    sudo chown 1001:1001 -R /home/arm/config
+
+   # Option B: keep existing ownership and grant group write
+   sudo chmod g+rwx /home/arm /home/arm/config
    ```
 
    Additionally, any folders the container creates during startup will be owned by the user specified in `start_arm_container.sh`. If the folder paths passed to the container are on a remote share (SMB, NFS, etc.) and do not already exist, this may result in the folders on the share not being owned by the same user.

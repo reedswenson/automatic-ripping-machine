@@ -620,7 +620,7 @@ def put_track(job, t_no, seconds, aspect, fps, mainfeature, source, filename="",
 def arm_setup(arm_log: Logger) -> None:
     """
     Setup arm - Create all the directories we need for arm to run
-    check that folders are writeable, and the db file is writeable
+    check that folders are readable, writable, and traversable, and the db file is writeable
     """
     arm_directories = (
         cfg.arm_config['RAW_PATH'],
@@ -632,13 +632,16 @@ def arm_setup(arm_log: Logger) -> None:
     # Check if DB file is writeable
     if not os.access(cfg.arm_config['DBFILE'], os.W_OK):
         arm_log.critical(f"Can't write to database file: {cfg.arm_config['DBFILE']}")
-    # Check directories for read/write permission -> create if they don't exist
+    # Check directories for read/write/execute permission -> create if they don't exist
+    # Ownership is not required; group/other bits and ACLs are enough.
     for folder in arm_directories:
         os.makedirs(folder, exist_ok=True)
         if not os.access(folder, os.R_OK):
             arm_log.error(f"Can't read from folder: {folder}")
         if not os.access(folder, os.W_OK):
             arm_log.critical(f"Can't write to folder: {folder}")
+        if not os.access(folder, os.X_OK):
+            arm_log.critical(f"Can't execute (traverse) folder: {folder}")
 
 
 def database_updater(args, job, wait_time=90):
